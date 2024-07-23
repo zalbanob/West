@@ -12,13 +12,20 @@ MODFLAGS = $(BASEMOD_FLAGS) \
            $(MOD_FLAG)../Modules \
            $(MOD_FLAG)../Para_kernel \
            $(MOD_FLAG)../Tools \
-           $(MOD_FLAG).
+           $(MOD_FLAG)./AsyncIO \
+		   $(MOD_FLAG).
 
 IO_KERNEL_OBJS = \
 cubefile.o \
 function3d.o \
 mod_west_io.o \
 mpiio.o \
+unix_stdio.o \
+./AsyncIO/tpool_bindings.o \
+./AsyncIO/cpu_count_mod.o \
+./AsyncIO/cpu_count.o \
+./AsyncIO/tpool.o \
+pdep_async_io.o \
 pdep_db.o \
 pdep_io.o \
 plep_db.o \
@@ -30,10 +37,13 @@ wfreq_io.o
 
 TLDEPS = bindir mods pwlibs pw
 
-all : title tldeps lib_io_kernel.a
+all : title tldeps make_async_io lib_io_kernel.a
 
 tldeps :
 	test -n "$(TLDEPS)" && ( cd ../.. ; $(MAKE) $(MFLAGS) $(TLDEPS) || exit 1) || :
+
+make_async_io :
+	test -n "$(TLDEPS)" && ( cd ./AsyncIO ; $(MAKE) $(MFLAGS) all || exit 1) || :
 
 lib_io_kernel.a : $(IO_KERNEL_OBJS)
 	$(AR) $(ARFLAGS) $@ $?

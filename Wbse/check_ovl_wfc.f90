@@ -137,6 +137,9 @@ MODULE check_ovl_wfc
       USE cell_base,            ONLY : omega
       USE mp_global,            ONLY : intra_bgrp_comm
       USE mp,                   ONLY : mp_sum
+      USE thrust_kernels
+      USE iso_c_binding
+      USE cudafor
       !
       IMPLICIT NONE
       !
@@ -147,19 +150,22 @@ MODULE check_ovl_wfc
       INTEGER :: dffts_nnr, ir
       REAL(DP) :: summ_ib, summ_jb, summ_ij
       !
+      !
+      !
+      REAL(c_double), dimension(3) :: sums
+      integer(c_size_t) :: size
+      !
       dffts_nnr = dffts%nnr
       !
-      summ_ib = 0._DP
-      summ_jb = 0._DP
-      summ_ij = 0._DP
+      size = int(dffts_nnr,kind=c_size_t)
+
+      !$acc host_data use_device(orb_i, orb_j)
+      call check_ovl_wannier_red(c_devloc(orb_i), c_devloc(orb_j), size, c_loc(sums))
+      !$acc end host_data
       !
-      !$acc parallel loop reduction(+:summ_ib,summ_jb,summ_ij) present(orb_i,orb_j) copy(summ_ib,summ_jb,summ_ij)
-      DO ir = 1, dffts_nnr
-         summ_ib = summ_ib + orb_i(ir)**4
-         summ_jb = summ_jb + orb_j(ir)**4
-         summ_ij = summ_ij + orb_i(ir)**2 * orb_j(ir)**2
-      ENDDO
-      !$acc end parallel
+      summ_ib = transfer(sums(1),summ_ib)
+      summ_jb = transfer(sums(2),summ_jb)
+      summ_ij = transfer(sums(3),summ_ij)
       !
       summ_ib = summ_ib * omega / (dffts%nr1*dffts%nr2*dffts%nr3)
       summ_jb = summ_jb * omega / (dffts%nr1*dffts%nr2*dffts%nr3)

@@ -40,7 +40,9 @@ v_x.o \
 wannier.o \
 west_environment.o \
 west_readin.o \
-west_print_clocks.o
+west_print_clocks.o \
+checkGpuMem.o \
+batched_dgemm.o 
 
 TLDEPS = bindir mods pwlibs pw
 

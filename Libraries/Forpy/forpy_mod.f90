@@ -1973,10 +1973,12 @@ CONTAINS
 !> Initialisation of forpy module. Must be called before using forpy.
 function forpy_initialize(use_numpy) result(ierror)
   !> Set to .false., if you do not need the array features of forpy powered by numpy. (Default: .true.)
+  USE, INTRINSIC :: IEEE_EXCEPTIONS
   logical, optional, intent(in) :: use_numpy
   integer(kind=C_INT) :: ierror
 
   logical :: numpy_flag
+  CALL IEEE_SET_HALTING_MODE(IEEE_ALL, .FALSE.)
 
   if (present(use_numpy)) then
     numpy_flag = use_numpy

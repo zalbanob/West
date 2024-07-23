@@ -105,6 +105,7 @@ MODULE wann_loc_wfc
       !
       ! Gygi et al., Computer Physics Communications 155, 1-6 (2003)
       !
+      use bcast_mul
       USE kinds,                 ONLY : DP
       USE io_global,             ONLY : stdout
       USE linear_algebra_kernel, ONLY : matdiago_dsy
@@ -132,14 +133,15 @@ MODULE wann_loc_wfc
       !
       INTEGER,ALLOCATABLE :: top(:),bot(:)
       REAL(DP),ALLOCATABLE :: ev(:)
-      REAL(DP),ALLOCATABLE :: rot(:,:),aux(:,:)
-      !$acc declare device_resident(rot,aux)
+      REAL(DP),ALLOCATABLE :: rot(:,:),aux(:,:), aux_3D(:,:,:)
+      !$acc declare device_resident(rot,aux, aux_3D)
       !
       INTEGER,PARAMETER :: itermax = 100
       !
       REAL(DP) :: time_spent(2)
       REAL(DP), EXTERNAL :: get_clock
       CHARACTER(20), EXTERNAL :: human_readable_time
+      type(DGEMM_BATCHED_STATE) :: batched_handle
       !
 #if defined(__CUDA)
       CALL start_clock_gpu('jade')
@@ -151,6 +153,7 @@ MODULE wann_loc_wfc
       !
       ALLOCATE(rot(m,m))
       ALLOCATE(aux(m,m))
+      ALLOCATE(aux_3D(m,m,na))
       !
       ! Handle odd m
       !
@@ -287,6 +290,8 @@ MODULE wann_loc_wfc
             !
             ! Apply rotation R to rows and columns of A
             !
+            !a(:,:,ia)=(rotT⋅a(:,:,ia))⋅rot
+            !rot: m×m  and a: m×m
             !$acc host_data use_device(rot,a,aux)
             DO ia = 1,na
                CALL DGEMM('T','N',m,m,m,1._DP,rot,m,a(1,1,ia),m,0._DP,aux,m)
@@ -296,6 +301,8 @@ MODULE wann_loc_wfc
             !
             ! Accumulate unitary transformation matrix U
             !
+            !aux = u⋅rot
+            !rot: m×m  and u: m×m
             !$acc host_data use_device(u,rot,aux)
             CALL DGEMM('N','N',m,m,m,1._DP,u,m,rot,m,0._DP,aux,m)
             !$acc end host_data

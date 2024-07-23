@@ -16,6 +16,7 @@ PROGRAM wbse_init
   !
   ! This is the main program that calculates the static screening.
   !
+  use nvtx
   USE check_stop,           ONLY : check_stop_init
   USE mp_global,            ONLY : mp_startup,mp_global_end
   USE west_environment,     ONLY : west_environment_start,west_environment_end
@@ -36,13 +37,23 @@ PROGRAM wbse_init
   !
   CALL west_environment_start( code )
   !
+  call nvtxStartRange("WBSE_INIT")
+  !!!!!!!!!!!!!!!!!!!!!!
   CALL west_readin( code )
   !
-  CALL wbse_init_setup( )
+  call nvtxStartRange("INIT_SETUP")
+    CALL wbse_init_setup( )
+  call nvtxEndRange
   !
-  CALL calc_tau( )
+  call nvtxStartRange("CALC_TAU")
+    CALL calc_tau( )
+  call nvtxEndRange
   !
-  CALL exx_ungo( )
+  call nvtxStartRange("EXX_UNGO")
+    CALL exx_ungo( )
+  call nvtxEndRange
+  !!!!!!!!!!!!!!!!!!!!!!
+  call nvtxEndRange
   !
   CALL clean_scratchfiles( )
   !

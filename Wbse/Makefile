@@ -10,6 +10,7 @@ MODFLAGS = $(BASEMOD_FLAGS) \
            $(MOD_FLAG)../DFPT_kernel \
            $(MOD_FLAG)../FFT_kernel \
            $(MOD_FLAG)../IO_kernel \
+		   $(MOD_FLAG)../IO_kernel/AsyncIO \
            $(MOD_FLAG)../Libraries/Base64 \
            $(MOD_FLAG)../Libraries/Forpy \
            $(MOD_FLAG)../Libraries/Json \
@@ -17,7 +18,8 @@ MODFLAGS = $(BASEMOD_FLAGS) \
            $(MOD_FLAG)../Para_kernel \
            $(MOD_FLAG)../Tools \
            $(MOD_FLAG)../Wstat \
-           $(MOD_FLAG).
+		   $(MOD_FLAG)./Thrust_Kernels \
+		   $(MOD_FLAG).
 
 WBSE_OBJS = \
 bse_kernel.o \
@@ -40,7 +42,7 @@ wbse_localization.o\
 wbse_memory_report.o \
 wbse_setup.o \
 wbse_solve_e_psi.o \
-wbse_tools.o
+wbse_tools.o 
 
 PWOBJS = ../../PW/src/libpw.a
 
@@ -58,6 +60,7 @@ WESTLIBS = \
 ../Modules/libmodules.a \
 ../Libraries/Forpy/libforpy.a \
 ../Libraries/Json/libjson.a \
+./Thrust_Kernels/lib_thrust_kernels.a \
 ../Libraries/Base64/libbase64.a
 
 TLDEPS = bindir mods pwlibs pw
