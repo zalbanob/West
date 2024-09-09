@@ -37,7 +37,7 @@ SUBROUTINE wbse_localization(current_spin,nbnd_s,nbnd_e,evc_loc,ovl_matrix,l_res
  #else
    USE wavefunctions,        ONLY : evc,psic
  #endif
-   !
+   use nvtx
    IMPLICIT NONE
    !
    INTEGER,INTENT(IN) :: current_spin,nbnd_s,nbnd_e
@@ -147,39 +147,34 @@ SUBROUTINE wbse_localization(current_spin,nbnd_s,nbnd_e,evc_loc,ovl_matrix,l_res
                IF(jbnd < nbnd_do) THEN
                   !
                   CALL double_invfft_gamma(dffts,npw,npwx,evc(:,jbnd_g),evc(:,jbnd_g+1),psic,'Wave')
-                  !ir  = transfer(c_devloc( psic) ,ir)
-                  !print *, "DEV ADDRESS: "
-                  !print "(z16)", ir
-                  !ir  = transfer(c_loc( psic) ,ir)
-                  !print *, "HOST ADDRESS: "
-                  !print "(z16)", ir
                   !
-                  !$acc host_data use_device(proj, aux)
-                  call complex_saxpy(.true. , c_loc(psic) , c_devloc(aux), c_devloc(proj),c_loc( val ),dffts_nnr)
-                  call complex_saxpy(.false., c_loc(psic), c_devloc(aux), c_devloc(proj),c_loc(val_2),dffts_nnr)
-                  !$acc end host_data
-                  !$acc update device(val,val_2)
-
+                  !!$acc host_data use_device(proj, aux)
+                  !call complex_saxpy(.true. , c_loc(psic) , c_devloc(aux), c_devloc(proj),c_loc( val ),dffts_nnr)
+                  !call complex_saxpy(.false., c_loc(psic), c_devloc(aux), c_devloc(proj),c_loc(val_2),dffts_nnr)
+                  !!$acc end host_data
+                  !!$acc update device(val,val_2)
+                  call nvtxStartRange("RED 1.1")
                   !!$acc cache(val(:), val_2(:))
-                  !!$acc parallel loop private(temp1,temp2) reduction(+:val(:), val_2(:)) present(proj, aux) default(present) 
-                  !DO ir = 1, dffts_nnr
-                  !   temp1 = aux(ir) * REAL (psic(ir), KIND=DP)
-                  !   temp2 = aux(ir) * AIMAG(psic(ir))
-                  !   val  (1) = val  (1) + temp1 * proj(ir, 1)
-                  !   val  (2) = val  (2) + temp1 * proj(ir, 2)
-                  !   val  (3) = val  (3) + temp1 * proj(ir, 3)
-                  !   val  (4) = val  (4) + temp1 * proj(ir, 4)
-                  !   val  (5) = val  (5) + temp1 * proj(ir, 5)
-                  !   val  (6) = val  (6) + temp1 * proj(ir, 6)
-!
-                  !   val_2(1) = val_2(1) + temp2 * proj(ir, 1)
-                  !   val_2(2) = val_2(2) + temp2 * proj(ir, 2)
-                  !   val_2(3) = val_2(3) + temp2 * proj(ir, 3)
-                  !   val_2(4) = val_2(4) + temp2 * proj(ir, 4)
-                  !   val_2(5) = val_2(5) + temp2 * proj(ir, 5)
-                  !   val_2(6) = val_2(6) + temp2 * proj(ir, 6) 
-                  !ENDDO
-                  !!$acc end parallel
+                  !$acc parallel loop private(temp1,temp2) reduction(+:val(:), val_2(:)) present(proj, aux) default(present) 
+                  DO ir = 1, dffts_nnr
+                     temp1 = aux(ir) * REAL (psic(ir), KIND=DP)
+                     temp2 = aux(ir) * AIMAG(psic(ir))
+                     val  (1) = val  (1) + temp1 * proj(ir, 1)
+                     val  (2) = val  (2) + temp1 * proj(ir, 2)
+                     val  (3) = val  (3) + temp1 * proj(ir, 3)
+                     val  (4) = val  (4) + temp1 * proj(ir, 4)
+                     val  (5) = val  (5) + temp1 * proj(ir, 5)
+                     val  (6) = val  (6) + temp1 * proj(ir, 6)
+
+                     val_2(1) = val_2(1) + temp2 * proj(ir, 1)
+                     val_2(2) = val_2(2) + temp2 * proj(ir, 2)
+                     val_2(3) = val_2(3) + temp2 * proj(ir, 3)
+                     val_2(4) = val_2(4) + temp2 * proj(ir, 4)
+                     val_2(5) = val_2(5) + temp2 * proj(ir, 5)
+                     val_2(6) = val_2(6) + temp2 * proj(ir, 6) 
+                  ENDDO
+                  !$acc end parallel
+                  call nvtxEndRange
 
                   !$acc kernels default(present)
                   a_matrix(ibnd,jbnd,1:6) = val(1:6)
@@ -188,29 +183,31 @@ SUBROUTINE wbse_localization(current_spin,nbnd_s,nbnd_e,evc_loc,ovl_matrix,l_res
                   a_matrix(ibnd,jbnd+1,1:6) = val_2(1:6)
                   IF(ibnd /= jbnd+1) a_matrix(jbnd+1,ibnd,1:6) = val_2(1:6)
                   !$acc end kernels
+
                   !
                ELSE
                   !
                   CALL single_invfft_gamma(dffts,npw,npwx,evc(:,jbnd_g),psic,'Wave')
                   !
 
-                  !$acc host_data use_device(proj, aux)
-                  call complex_saxpy(.true. , c_loc(psic) , c_devloc(aux), c_devloc(proj),c_loc( val ),dffts_nnr)
-                  !$acc end host_data
-                  !$acc update device(val)
-
+                  !!$acc host_data use_device(proj, aux)
+                  !call complex_saxpy(.true. , c_loc(psic) , c_devloc(aux), c_devloc(proj),c_loc( val ),dffts_nnr)
+                  !!$acc end host_data
+                  !!$acc update device(val)
+                  call nvtxStartRange("RED 1.2")
                   !!$acc cache(val(:))
-                  !!$acc parallel loop reduction(+:val(:)) present(proj, aux, psic) default(present) private(temp1)
-                  ! DO ir = 1,dffts_nnr
-                  !    temp1 = aux(ir)*REAL(psic(ir),KIND=DP)
-                  !    val(1) = val(1) + temp1 * proj(ir,1)
-                  !    val(2) = val(2) + temp1 * proj(ir,2)
-                  !    val(3) = val(3) + temp1 * proj(ir,3)
-                  !    val(4) = val(4) + temp1 * proj(ir,4)
-                  !    val(5) = val(5) + temp1 * proj(ir,5)
-                  !    val(6) = val(6) + temp1 * proj(ir,6)
-                  ! ENDDO
-                  ! !$acc end parallel loop
+                  !$acc parallel loop reduction(+:val(:)) present(proj, aux, psic) default(present) private(temp1)
+                   DO ir = 1,dffts_nnr
+                      temp1 = aux(ir)*REAL(psic(ir),KIND=DP)
+                      val(1) = val(1) + temp1 * proj(ir,1)
+                      val(2) = val(2) + temp1 * proj(ir,2)
+                      val(3) = val(3) + temp1 * proj(ir,3)
+                      val(4) = val(4) + temp1 * proj(ir,4)
+                      val(5) = val(5) + temp1 * proj(ir,5)
+                      val(6) = val(6) + temp1 * proj(ir,6)
+                   ENDDO
+                   !$acc end parallel loop
+                   call nvtxEndRange
                   !
                   !$acc kernels default(present)
                   a_matrix(ibnd,jbnd,1:6) = val(1:6)
