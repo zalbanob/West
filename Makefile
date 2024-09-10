@@ -1,6 +1,6 @@
 # Makefile for the WEST software
 
-include ../make.inc
+include /gpfs/projects/bsc99/bsc099260/EuroHPC/DpNAFB/SRC/QEdir/make.inc
 
 default:
 	@echo "Welcome to WEST!"

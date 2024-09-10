@@ -79,7 +79,7 @@ MODULE wbse_bgrp
       !
       ! I/O
       !
-      COMPLEX(DP), INTENT(IN) :: distributed(npwx,band_group%nlocx)
+      COMPLEX(DP), INTENT(IN)  :: distributed(npwx,band_group%nlocx)
       COMPLEX(DP), INTENT(OUT) :: gathered(npwx,nbndval0x-n_trunc_bands)
       INTEGER, INTENT(OUT) :: req
       !

@@ -105,7 +105,6 @@ MODULE wann_loc_wfc
       !
       ! Gygi et al., Computer Physics Communications 155, 1-6 (2003)
       !
-      use bcast_mul
       USE kinds,                 ONLY : DP
       USE io_global,             ONLY : stdout
       USE linear_algebra_kernel, ONLY : matdiago_dsy
@@ -141,7 +140,6 @@ MODULE wann_loc_wfc
       REAL(DP) :: time_spent(2)
       REAL(DP), EXTERNAL :: get_clock
       CHARACTER(20), EXTERNAL :: human_readable_time
-      type(DGEMM_BATCHED_STATE) :: batched_handle
       !
 #if defined(__CUDA)
       CALL start_clock_gpu('jade')

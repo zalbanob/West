@@ -5,7 +5,7 @@ include ../../make.inc
 # location of needed modules
 MODFLAGS = $(BASEMOD_FLAGS) \
            $(MOD_FLAG)../Modules \
-           $(MOD_FLAG).
+           $(MOD_FLAG). 
 
 FFT_KERNEL_OBJS = \
 fft_at_gamma.o \
@@ -14,13 +14,13 @@ fft_interpolation.o
 
 TLDEPS = bindir mods pwlibs pw
 
-all : title tldeps lib_fft_kernel.a
+all : title tldeps lib_fft_kernel.a 
 
 tldeps :
 	test -n "$(TLDEPS)" && ( cd ../.. ; $(MAKE) $(MFLAGS) $(TLDEPS) || exit 1) || :
 
 lib_fft_kernel.a : $(FFT_KERNEL_OBJS)
-	$(AR) $(ARFLAGS) $@ $?
+	$(AR) $(ARFLAGS) $@ $? 
 	$(RANLIB) $@
 
 clean :

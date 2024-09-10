@@ -1344,6 +1344,19 @@ MODULE wstat_tools
                   ENDDO
                ENDDO
                !$acc end parallel
+
+               !!$acc parallel vector_length(1024) present(vr_distr,hg,ag)
+               !!$acc loop collapse(2)
+               !DO il2 = l2_s,l2_e                 
+               !   DO il3 = 1,npwq
+               !      DO il1 = 1,l1_e
+               !         ig1 = nimage*(il1-1)+idx+1
+               !         dconst = vr_distr(ig1,il2)
+               !         hg(il3,il2) = dconst*ag(il3,il1)+hg(il3,il2)
+               !       ENDDO
+               !   ENDDO
+               !ENDDO
+               !!$acc end parallel
                !
             ENDIF
             !
@@ -1500,6 +1513,19 @@ MODULE wstat_tools
                   ENDDO
                ENDDO
                !$acc end parallel
+
+               !!$acc parallel vector_length(1024) present(vr_distr,hg,ag)                  
+               !!$acc loop collapse(2)
+               !DO il2 = l2_s,l2_e
+               !   DO il3 = 1,npwq
+               !      DO il1 = 1,l1_e
+               !         ig1 = nimage*(il1-1)+idx+1
+               !         zconst = vr_distr(ig1,il2)
+               !         hg(il3,il2) = zconst*ag(il3,il1)+hg(il3,il2)
+               !      ENDDO
+               !   ENDDO
+               !ENDDO
+               !!$acc end parallel
                !
             ENDIF
             !

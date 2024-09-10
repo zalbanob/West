@@ -294,7 +294,7 @@ SUBROUTINE west_apply_liouvillian(evc1,evc1_new,sf)
      !$acc parallel loop collapse(2) present(evc1_new,hevc1,factors,evc1)
      DO lbnd = 1,nbnd_do
         DO ig = 1,npw
-           evc1_new(ig,lbnd,iks) = evc1_new(ig,lbnd,iks)+hevc1(ig,lbnd)-factors(lbnd)*evc1(ig,lbnd,iks)
+         evc1_new(ig,lbnd,iks) = evc1_new(ig,lbnd,iks)+hevc1(ig,lbnd)-factors(lbnd)*evc1(ig,lbnd,iks)
         ENDDO
      ENDDO
      !$acc end parallel

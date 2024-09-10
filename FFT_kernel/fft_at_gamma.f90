@@ -30,6 +30,141 @@ MODULE fft_at_gamma
   !
   CONTAINS
   !
+  SUBROUTINE double_invfft_gamma_streamed(id1, dfft,n,nx,a1,a2,b,cdriver)
+   use nvtx
+   IMPLICIT NONE
+   !
+   ! I/O
+   !
+   TYPE(fft_type_descriptor),INTENT(IN) :: dfft
+   INTEGER,INTENT(IN)      :: n,nx
+   INTEGER, INTENT(IN)     :: id1
+   COMPLEX(DP),INTENT(IN)  :: a1(nx)
+   COMPLEX(DP),INTENT(IN)  :: a2(nx)
+   COMPLEX(DP),INTENT(OUT) :: b(dfft%nnr)
+   #if defined(__CUDA)
+   ATTRIBUTES(DEVICE) :: a1,a2,b
+   #endif
+   CHARACTER(LEN=*),INTENT(IN) :: cdriver
+   ! Workspace
+   INTEGER :: ig
+   !$acc kernels
+   b(:) = z_0
+   !$acc end kernels
+   !$acc parallel loop
+   DO ig = 1,n
+      b(dfft_nl_d(ig)) = a1(ig)+z_i*a2(ig)
+      b(dfft_nlm_d(ig)) = CONJG(a1(ig)-z_i*a2(ig))
+   ENDDO
+   !$acc end parallel
+   CALL invfft_y_gpu(cdriver,b,dfft)
+ END SUBROUTINE
+
+  !SUBROUTINE double_invfft_gamma_streamed(id1, dfft,n,nx,a1,a2,b,cdriver)
+  !  USE openacc
+  !  USE cudafor
+  !  IMPLICIT NONE
+  !  
+  !  TYPE(fft_type_descriptor),INTENT(IN) :: dfft
+  !  INTEGER,INTENT(IN) :: n,nx, id1
+  !  INTEGER:: id2
+  !  COMPLEX(DP),INTENT(IN) :: a1(nx), a2(nx)
+  !  COMPLEX(DP),INTENT(OUT) :: b(dfft%nnr)
+  !  CHARACTER(LEN=*),INTENT(IN) :: cdriver
+  !  INTEGER :: ig
+  !  ATTRIBUTES(DEVICE) :: a1,a2,b
+!
+  !  INTEGER(KIND=cuda_stream_kind) :: stream1, stream2
+  !  INTEGER :: istat
+  !  
+  !  istat = cudaStreamCreate(stream1)
+  !  istat = cudaStreamCreate(stream2)
+  !  id2 = id1 + 1
+  !  
+  !  ! Set OpenACC CUDA streams
+  !  CALL acc_set_cuda_stream(id1, stream1)
+  !  CALL acc_set_cuda_stream(id2, stream2)
+  !  
+  !  ! Initialize b to zero
+  !  !$acc kernels async(1)
+  !  b(:) = z_0
+  !  !$acc end kernels
+  !  
+  !  !$acc parallel loop async(id1)
+  !  DO ig = 1, n/2
+  !    b(dfft_nl_d(ig)) = a1(ig) + z_i*a2(ig)
+  !  END DO
+  !  !$acc end parallel loop
+ !
+  !  !$acc parallel loop async(id2)
+  !  DO ig = n/2 + 1, n
+  !    b(dfft_nl_d(ig)) = a1(ig) + z_i*a2(ig)
+  !    b(dfft_nlm_d(ig)) = CONJG(a1(ig) - z_i*a2(ig))
+  !  END DO
+  !  !$acc end parallel loop
+ !
+  !  !$acc wait(id1)
+  !  !$acc wait(id2)
+ !
+  !  CALL invfft_y_gpu(cdriver, b, dfft, 1, stream1)
+ !
+  !  istat = cudaStreamDestroy(stream1)
+  !  istat = cudaStreamDestroy(stream2)
+!
+  !END SUBROUTINE
+  !
+ SUBROUTINE batched_double_invfft_gamma(dfft, n, nx, batch_size, a1, a2, b, cdriver)
+   !
+   ! Batched INVFFT : G ---> R
+   !
+   ! INPUT  : n         = actual number of PW
+   !          nx        = maximum number of PW
+   !          batch_size= number of functions to process in parallel
+   !          a1        = COMPLEX array containing batch_size COMPLEX functions in G space
+   !          a2        = COMPLEX array containing batch_size COMPLEX functions in G space
+   ! OUTPUT : b         = COMPLEX array containing batch_size*2 REAL functions in R space
+   !
+   use nvtx
+   IMPLICIT NONE
+   !
+   ! I/O
+   !
+   TYPE(fft_type_descriptor), INTENT(IN) :: dfft
+   INTEGER, INTENT(IN) :: n, nx, batch_size
+   COMPLEX(DP), INTENT(IN) :: a1(nx, batch_size)
+   COMPLEX(DP), INTENT(IN) :: a2(nx, batch_size)
+   COMPLEX(DP), INTENT(OUT) :: b(dfft%nnr, batch_size)
+   #if defined(__CUDA)
+   ATTRIBUTES(DEVICE) :: a1, a2, b
+   #endif
+   CHARACTER(LEN=*), INTENT(IN) :: cdriver
+   !
+   ! Workspace
+   !
+   INTEGER :: ig, ibatch
+   !
+   !!$acc kernels
+   !b(:,:) = z_0
+   !!$acc end kernels
+   !
+
+   !DO ibatch = 1, batch_size
+   !  !$acc parallel loop async(ibatch)
+   !   DO ig = 1, n
+   !    b(dfft_nl_d(ig), ibatch) = a1(ig, ibatch) + z_i * a2(ig, ibatch)
+   !    b(dfft_nlm_d(ig), ibatch) = CONJG(a1(ig, ibatch) - z_i * a2(ig, ibatch))
+   !  END DO
+   !  !$acc end parallel
+   !END DO
+   !!$acc wait
+   !
+   call nvtxStartRange("batched_invfft")
+   DO ibatch = 1, batch_size
+     CALL invfft(cdriver, b(:, ibatch), dfft)
+   END DO
+   call nvtxEndRange
+ END SUBROUTINE
+
   SUBROUTINE double_invfft_gamma(dfft,n,nx,a1,a2,b,cdriver)
     !
     ! INVFFT : G ---> R
@@ -40,6 +175,7 @@ MODULE fft_at_gamma
     !          a2    = COMPLEX array containing ONE COMPLEX function in G space
     ! OUTPUT : b     = ONE COMPLEX array containing TWO REAL functions in R space
     !
+    use nvtx
     IMPLICIT NONE
     !
     ! I/O
@@ -49,16 +185,16 @@ MODULE fft_at_gamma
     COMPLEX(DP),INTENT(IN) :: a1(nx)
     COMPLEX(DP),INTENT(IN) :: a2(nx)
     COMPLEX(DP),INTENT(OUT) :: b(dfft%nnr)
-#if defined(__CUDA)
+    #if defined(__CUDA)
     ATTRIBUTES(DEVICE) :: a1,a2,b
-#endif
+    #endif
     CHARACTER(LEN=*),INTENT(IN) :: cdriver
     !
     ! Workspace
     !
     INTEGER :: ig
     !
-#if defined(__CUDA)
+    #if defined(__CUDA)
     !$acc kernels
     b(:) = z_0
     !$acc end kernels
@@ -69,7 +205,7 @@ MODULE fft_at_gamma
        b(dfft_nlm_d(ig)) = CONJG(a1(ig)-z_i*a2(ig))
     ENDDO
     !$acc end parallel
-#else
+    #else
     !$OMP PARALLEL PRIVATE(ig)
     !$OMP DO
     DO ig = 1,dfft%nnr
@@ -83,9 +219,11 @@ MODULE fft_at_gamma
     ENDDO
     !$OMP ENDDO
     !$OMP END PARALLEL
-#endif
+    #endif
     !
+    call nvtxStartRange("invfft")
     CALL invfft(cdriver,b,dfft)
+    call nvtxEndRange
     !
   END SUBROUTINE
   !
@@ -108,9 +246,9 @@ MODULE fft_at_gamma
     COMPLEX(DP),INTENT(INOUT) :: a(dfft%nnr)
     COMPLEX(DP),INTENT(OUT) :: b1(nx)
     COMPLEX(DP),INTENT(OUT) :: b2(nx)
-#if defined(__CUDA)
+    #if defined(__CUDA)
     ATTRIBUTES(DEVICE) :: a,b1,b2
-#endif
+    #endif
     CHARACTER(LEN=*),INTENT(IN) :: cdriver
     !
     ! Workspace
@@ -122,7 +260,7 @@ MODULE fft_at_gamma
     !
     ! Keep only G>=0
     !
-#if defined(__CUDA)
+    #if defined(__CUDA)
     !$acc parallel loop
     DO ig = 1,n
        fp = (a(dfft_nl_d(ig))+a(dfft_nlm_d(ig)))*0.5_DP
@@ -138,7 +276,7 @@ MODULE fft_at_gamma
        b2(n+1:nx) = z_0
        !$acc end kernels
     ENDIF
-#else
+    #else
     !$OMP PARALLEL PRIVATE(ig,fp,fm)
     !$OMP DO
     DO ig = 1,n
@@ -154,7 +292,7 @@ MODULE fft_at_gamma
        b1(ig) = z_0
        b2(ig) = z_0
     ENDDO
-#endif
+    #endif
     !
   END SUBROUTINE
   !
@@ -175,16 +313,16 @@ MODULE fft_at_gamma
     INTEGER,INTENT(IN) :: n,nx
     COMPLEX(DP),INTENT(IN) :: a1(nx)
     COMPLEX(DP),INTENT(OUT) :: b(dfft%nnr)
-#if defined(__CUDA)
+    #if defined(__CUDA)
     ATTRIBUTES(DEVICE) :: a1,b
-#endif
+    #endif
     CHARACTER(LEN=*),INTENT(IN) :: cdriver
     !
     ! Workspace
     !
     INTEGER :: ig
     !
-#if defined(__CUDA)
+    #if defined(__CUDA)
     !$acc kernels
     b(:) = z_0
     !$acc end kernels
@@ -195,7 +333,7 @@ MODULE fft_at_gamma
        b(dfft_nlm_d(ig)) = CONJG(a1(ig))
     ENDDO
     !$acc end parallel
-#else
+    #else
     !$OMP PARALLEL PRIVATE(ig)
     !$OMP DO
     DO ig = 1,dfft%nnr
@@ -209,7 +347,7 @@ MODULE fft_at_gamma
     ENDDO
     !$OMP ENDDO
     !$OMP END PARALLEL
-#endif
+    #endif
     !
     CALL invfft(cdriver,b,dfft)
     !
@@ -232,9 +370,9 @@ MODULE fft_at_gamma
     INTEGER,INTENT(IN) :: n,nx
     COMPLEX(DP),INTENT(INOUT) :: a(dfft%nnr)
     COMPLEX(DP),INTENT(OUT) :: b1(nx)
-#if defined(__CUDA)
+    #if defined(__CUDA)
     ATTRIBUTES(DEVICE) :: a,b1
-#endif
+    #endif
     CHARACTER(LEN=*),INTENT(IN) :: cdriver
     !
     ! Workspace
@@ -245,7 +383,7 @@ MODULE fft_at_gamma
     !
     ! Keep only G>=0
     !
-#if defined(__CUDA)
+    #if defined(__CUDA)
     !$acc parallel loop
     DO ig = 1,n
        b1(ig) = a(dfft_nl_d(ig))
@@ -257,7 +395,7 @@ MODULE fft_at_gamma
        b1(n+1:nx) = z_0
        !$acc end kernels
     ENDIF
-#else
+    #else
     !$OMP PARALLEL PRIVATE(ig)
     !$OMP DO
     DO ig=1,n
@@ -269,7 +407,7 @@ MODULE fft_at_gamma
     DO ig = (n+1),nx
        b1(ig) = z_0
     ENDDO
-#endif
+    #endif
     !
   END SUBROUTINE
   !

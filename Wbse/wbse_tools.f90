@@ -50,6 +50,10 @@ MODULE wbse_tools
       USE westcom,              ONLY : nbnd_occ,n_trunc_bands
       USE gvect,                ONLY : gstart
       USE west_mp,              ONLY : west_mp_circ_shift
+      USE thrust_kernels,       ONLY : reduce_ag_bg
+      use nvtx
+      use iso_c_binding
+      use cudafor
       !
       IMPLICIT NONE
       !
@@ -59,6 +63,7 @@ MODULE wbse_tools
       COMPLEX(DP),INTENT(IN) :: bg(npwx,band_group%nlocx,kpt_pool%nloc,pert%nlocx)
       INTEGER,INTENT(IN) :: l2_s,l2_e
       REAL(DP),INTENT(INOUT) :: c_distr(pert%nglob,pert%nlocx)
+      INTEGER, target :: ag_shape(4), bg_shape(4), c_distr_shape(2)
       INTEGER,INTENT(IN) :: g_e
       LOGICAL,INTENT(IN) :: sf
       !
@@ -71,12 +76,17 @@ MODULE wbse_tools
       REAL(DP):: reduce
       INTEGER,ALLOCATABLE :: nbnd_loc(:)
       INTEGER,PARAMETER :: flks(2) = [2,1]
+      character(len=100) :: filename
+      integer :: int_address
       !
 #if defined(__CUDA)
       CALL start_clock_gpu('build_hr')
 #else
       CALL start_clock('build_hr')
 #endif
+      ag_shape      = shape(ag)
+      bg_shape      = shape(bg)
+      c_distr_shape = shape(c_distr)
       !
       pert_nglob = pert%nglob
       kpt_pool_nloc = kpt_pool%nloc
@@ -129,47 +139,14 @@ MODULE wbse_tools
          ENDDO
          !
          IF(l1_e > 0 .AND. l2_e >= l2_s) THEN
-            !
-            !$acc parallel vector_length(1024) present(ag,bg,c_distr(1:pert_nglob,l2_s:l2_e),nbnd_loc,ngk)
-            !$acc loop collapse(2)
-            DO il1 = 1,l1_e
-               DO il2 = l2_s,l2_e
-                  !
-                  ! ig1 = pert%l2g(il1,idx)
-                  !
-                  ig1 = nimage*(il1-1)+idx+1
-                  !
-                  reduce = 0._DP
-                  !
-                  !$acc loop seq
-                  DO iks = 1,kpt_pool_nloc
-                     !
-                     nbndval = nbnd_loc(iks)
-                     npw = ngk(iks)
-                     !
-                     !$acc loop collapse(2) reduction(+:reduce)
-                     DO lbnd = 1,nbndval
-                        DO il3 = 1,npw
-                           reduce = reduce+2._DP*REAL(ag(il3,lbnd,iks,il1),KIND=DP)*REAL(bg(il3,lbnd,iks,il2),KIND=DP) &
-                           & +2._DP*AIMAG(ag(il3,lbnd,iks,il1))*AIMAG(bg(il3,lbnd,iks,il2))
-                        ENDDO
-                     ENDDO
-                     !
-                     IF(gstart == 2) THEN
-                        !$acc loop reduction(+:reduce)
-                        DO lbnd = 1,nbndval
-                           reduce = reduce-REAL(ag(1,lbnd,iks,il1),KIND=DP)*REAL(bg(1,lbnd,iks,il2),KIND=DP)
-                        ENDDO
-                     ENDIF
-                     !
-                  ENDDO
-                  !
-                  c_distr(ig1,il2) = reduce
-                  !
-               ENDDO
-            ENDDO
-            !$acc end parallel
-            !
+
+            !$acc host_data use_device(ag,bg,c_distr(1:pert_nglob,l2_s:l2_e),nbnd_loc,ngk)
+            call reduce_ag_bg(c_loc(ag), ag_shape, size(ag_shape), &
+                              c_loc(bg), bg_shape, size(bg_shape), &
+                              c_loc(c_distr), c_distr_shape, size(c_distr_shape), &
+                              c_loc(nbnd_loc), c_loc(ngk), &
+                              l1_e, l2_s, l2_e, kpt_pool_nloc, nimage, idx, gstart)
+            !$acc end host_data
          ENDIF
          !
          ! Cycle ag
@@ -212,11 +189,13 @@ MODULE wbse_tools
     SUBROUTINE update_with_vr_distr_real(ag,bg,nselect,n,lda,vr_distr,ew,sf)
       !------------------------------------------------------------------------
       !
+      use nvtx
       USE mp_global,            ONLY : inter_image_comm,nimage,my_image_id
       USE distribution_center,  ONLY : pert,kpt_pool,band_group
       USE pwcom,                ONLY : npwx,npw,ngk
       USE westcom,              ONLY : nbnd_occ,n_trunc_bands
       USE west_mp,              ONLY : west_mp_circ_shift
+      use thrust_kernels,       ONLY : update_hg
       !
       IMPLICIT NONE
       !
@@ -232,13 +211,16 @@ MODULE wbse_tools
       ! Workspace
       !
       INTEGER :: il1,il2,il3,ig1,ig2,lbnd,ibnd,iks,iks_do,nbndval
-      INTEGER :: l1_e,l2_s,l2_e
+      INTEGER :: l1_e,l2_s,l2_e, start
       INTEGER :: icycl,idx,nloc
       INTEGER :: kpt_pool_nloc
       REAL(DP) :: dconst
       INTEGER,ALLOCATABLE :: nbnd_loc(:)
       COMPLEX(DP),ALLOCATABLE :: hg(:,:,:,:)
       INTEGER,PARAMETER :: flks(2) = [2,1]
+      integer (kind=4)  :: nshape(4)
+      real(8) :: start_time, end_time, elapsed_time
+
       !
 #if defined(__CUDA)
       CALL start_clock_gpu('update_vr')
@@ -308,41 +290,35 @@ MODULE wbse_tools
                EXIT
             ENDIF
          ENDDO
-         !
+         
          IF(l1_e > 0 .AND. l2_s > 0 .AND. l2_e >= l2_s) THEN
             !
-            !$acc parallel vector_length(1024) present(vr_distr,nbnd_loc,ngk,hg,ag)
-            !$acc loop seq
-            DO il1 = 1,l1_e
-               !
-               ! ig1 = pert%l2g(il1,idx)
-               !
-               ig1 = nimage*(il1-1)+idx+1
-               !
-               !$acc loop
-               DO il2 = l2_s,l2_e
-                  !
-                  dconst = vr_distr(ig1,il2)
-                  !
-                  !$acc loop seq
-                  DO iks = 1,kpt_pool_nloc
-                     !
-                     nbndval = nbnd_loc(iks)
-                     npw = ngk(iks)
-                     !
-                     !$acc loop collapse(2)
-                     DO lbnd = 1,nbndval
-                        DO il3 = 1,npw
-                           hg(il3,lbnd,iks,il2) = dconst*ag(il3,lbnd,iks,il1)+hg(il3,lbnd,iks,il2)
-                        ENDDO
-                     ENDDO
-                     !
-                  ENDDO
-                  !
-               ENDDO
-               !
-            ENDDO
-            !$acc end parallel
+            !call nvtxStartRange("OP1")
+            nshape = shape(ag)
+            !$acc host_data use_device(vr_distr, ag, hg, nbnd_loc, ngk) 
+            call update_hg(c_devloc(vr_distr), c_devloc(ag), c_devloc(hg), c_devloc(nbnd_loc), c_devloc(ngk), l2_s, l2_e, kpt_pool_nloc, l1_e, nimage, idx, c_loc(nshape) )
+            !$acc end host_data
+
+            !!$acc parallel vector_length(1024) present(vr_distr,nbnd_loc,ngk,hg,ag)
+            !!$acc loop collapse(2)
+            !DO il2 = l2_s,l2_e
+            !   DO iks = 1,kpt_pool_nloc
+            !      nbndval = nbnd_loc(iks)
+            !      npw = ngk(iks)
+            !      !$acc loop collapse(2)
+            !      DO lbnd = 1,nbndval
+            !         DO il3 = 1,npw
+            !            DO il1 = 1,l1_e
+            !               ig1 = nimage * (il1-1) + idx + 1
+            !               hg(il3,lbnd,iks,il2) = vr_distr(ig1,il2) * ag(il3,lbnd,iks,il1) + hg(il3,lbnd,iks,il2)
+            !            ENDDO
+            !         ENDDO
+            !      ENDDO
+            !   ENDDO
+            !ENDDO
+            !!$acc end parallel
+
+            !call nvtxEndRange
             !
          ENDIF
          !
@@ -359,35 +335,26 @@ MODULE wbse_tools
       ENDDO
       !
       IF(l2_s > 0 .AND. l2_e >= l2_s) THEN
-         !
+         call nvtxStartRange("Potential OP")
          !$acc parallel vector_length(1024) present(ew,nbnd_loc,ngk,ag,hg)
-         !$acc loop
+         !$acc loop collapse(2)
          DO il2 = l2_s,l2_e
-            !
-            ! ig2 = pert%l2g(il2)
-            !
-            ig2 = nimage*(il2-1)+my_image_id+1
-            !
-            dconst = -ew(ig2)
-            !
-            !$acc loop seq
             DO iks = 1,kpt_pool_nloc
-               !
                nbndval = nbnd_loc(iks)
                npw = ngk(iks)
-               !
-               !$acc loop collapse(2)
+               !$acc loop
                DO lbnd = 1,nbndval
+                  !$acc loop vector
                   DO il3 = 1,npw
-                     ag(il3,lbnd,iks,il2) = dconst*hg(il3,lbnd,iks,il2)
+                     ig2 = nimage*(il2-1)+my_image_id+1
+                     dconst = -ew(ig2)
+                     ag(il3,lbnd,iks,il2) = dconst * hg(il3,lbnd,iks,il2)
                   ENDDO
                ENDDO
-               !
             ENDDO
-            !
          ENDDO
          !$acc end parallel
-         !
+         call nvtxEndRange
       ENDIF
       !
       !$acc kernels present(hg)
@@ -410,40 +377,32 @@ MODULE wbse_tools
          ENDDO
          !
          IF(l1_e > 0 .AND. l2_s > 0 .AND. l2_e >= l2_s) THEN
-            !
-            !$acc parallel vector_length(1024) present(vr_distr,nbnd_loc,ngk,hg,bg)
-            !$acc loop seq
-            DO il1 = 1,l1_e
-               !
-               ! ig1 = pert%l2g(il1,idx)
-               !
-               ig1 = nimage*(il1-1)+idx+1
-               !
-               !$acc loop
-               DO il2 = l2_s,l2_e
-                  !
-                  dconst = vr_distr(ig1,il2)
-                  !
-                  !$acc loop seq
-                  DO iks = 1,kpt_pool_nloc
-                     !
-                     nbndval = nbnd_loc(iks)
-                     npw = ngk(iks)
-                     !
-                     !$acc loop collapse(2)
-                     DO lbnd = 1,nbndval
-                        DO il3 = 1,npw
-                           hg(il3,lbnd,iks,il2) = dconst*bg(il3,lbnd,iks,il1)+hg(il3,lbnd,iks,il2)
-                        ENDDO
-                     ENDDO
-                     !
-                  ENDDO
-                  !
-               ENDDO
-               !
-            ENDDO
-            !$acc end parallel
-            !
+            call nvtxStartRange("OP2")
+            nshape = shape(hg)
+            !$acc host_data use_device(vr_distr, bg, hg, nbnd_loc, ngk) 
+            call update_hg(c_devloc(vr_distr), c_devloc(bg), c_devloc(hg), c_devloc(nbnd_loc), c_devloc(ngk), l2_s, l2_e, kpt_pool_nloc, l1_e, nimage, idx, c_loc(nshape))
+            !$acc end host_data
+
+            !!$acc parallel vector_length(1024) present(vr_distr,nbnd_loc,ngk,hg,bg)
+            !!$acc loop collapse(2)
+            !DO il2 = l2_s,l2_e
+            !   DO iks = 1,kpt_pool_nloc
+            !      nbndval = nbnd_loc(iks)
+            !      npw = ngk(iks)
+            !      !$acc loop collapse(2)
+            !      DO lbnd = 1,nbndval
+            !         DO il3 = 1,npw
+            !            DO il1 = 1,l1_e
+            !               ig1 = nimage*(il1-1)+idx+1
+            !               dconst = vr_distr(ig1,il2)
+            !               hg(il3,lbnd,iks,il2) = dconst * bg(il3,lbnd,iks,il1) + hg(il3,lbnd,iks,il2)
+            !            ENDDO
+            !         ENDDO
+            !      ENDDO
+            !   ENDDO
+            !ENDDO
+            !!$acc end parallel
+            call nvtxEndRange
          ENDIF
          !
          ! Cycle bg
@@ -460,26 +419,26 @@ MODULE wbse_tools
       !
       IF(l2_s > 0 .AND. l2_e >= l2_s) THEN
          !
+         call nvtxStartRange("Potenital OPT 2")
          !$acc parallel vector_length(1024) present(nbnd_loc,ngk,ag,hg)
          !$acc loop
          DO il2 = l2_s,l2_e
-            !$acc loop seq
+            !$acc loop ! i think should not be seq too
             DO iks = 1,kpt_pool_nloc
-               !
                nbndval = nbnd_loc(iks)
                npw = ngk(iks)
-               !
-               !$acc loop collapse(2)
+               !$acc loop 
                DO lbnd = 1,nbndval
+                  !$acc loop vector
                   DO il3 = 1,npw
-                     ag(il3,lbnd,iks,il2) = ag(il3,lbnd,iks,il2)+hg(il3,lbnd,iks,il2)
+                     ag(il3,lbnd,iks,il2) = ag(il3,lbnd,iks,il2) + hg(il3,lbnd,iks,il2)
                   ENDDO
                ENDDO
                !
             ENDDO
          ENDDO
          !$acc end parallel
-         !
+         call nvtxEndRange
       ENDIF
       !
       !$acc exit data delete(hg,vr_distr,ew,nbnd_loc)
@@ -503,6 +462,8 @@ MODULE wbse_tools
       USE pwcom,                ONLY : npwx,npw,ngk
       USE westcom,              ONLY : nbnd_occ,n_trunc_bands
       USE west_mp,              ONLY : west_mp_circ_shift
+      use nvtx
+      use thrust_kernels,       ONLY : update_hg
       !
       IMPLICIT NONE
       !
@@ -523,6 +484,7 @@ MODULE wbse_tools
       INTEGER,ALLOCATABLE :: nbnd_loc(:)
       COMPLEX(DP),ALLOCATABLE :: hg(:,:,:,:)
       INTEGER,PARAMETER :: flks(2) = [2,1]
+      integer (kind=4)  :: nshape(4)
       !
 #if defined(__CUDA)
       CALL start_clock_gpu('refresh_vr')
@@ -587,40 +549,31 @@ MODULE wbse_tools
          ENDDO
          !
          IF(l1_e > 0 .AND. l2_e >= l2_s) THEN
-            !
-            !$acc parallel vector_length(1024) present(vr_distr,nbnd_loc,ngk,hg,ag)
-            !$acc loop seq
-            DO il1 = 1,l1_e
-               !
-               ! ig1 = pert%l2g(il1,idx)
-               !
-               ig1 = nimage*(il1-1)+idx+1
-               !
-               !$acc loop
-               DO il2 = l2_s,l2_e
-                  !
-                  dconst = vr_distr(ig1,il2)
-                  !
-                  !$acc loop seq
-                  DO iks = 1,kpt_pool_nloc
-                     !
-                     nbndval = nbnd_loc(iks)
-                     npw = ngk(iks)
-                     !
-                     !$acc loop collapse(2)
-                     DO lbnd = 1,nbndval
-                        DO il3 = 1,npw
-                           hg(il3,lbnd,iks,il2) = dconst*ag(il3,lbnd,iks,il1)+hg(il3,lbnd,iks,il2)
-                        ENDDO
-                     ENDDO
-                     !
-                  ENDDO
-                  !
-               ENDDO
-               !
-            ENDDO
-            !$acc end parallel
-            !
+            call nvtxStartRange("OP3")
+            nshape = shape(ag)
+            !$acc host_data use_device(vr_distr, ag, hg, nbnd_loc, ngk) 
+            call update_hg(c_devloc(vr_distr), c_devloc(ag), c_devloc(hg), c_devloc(nbnd_loc), c_devloc(ngk), l2_s, l2_e, kpt_pool_nloc, l1_e, nimage, idx, c_loc(nshape) )
+            !$acc end host_data
+
+            !!$acc parallel vector_length(1024) present(vr_distr,nbnd_loc,ngk,hg,ag)
+            !!$acc loop collapse(2)
+            !DO il2 = l2_s,l2_e
+            !   DO iks = 1,kpt_pool_nloc
+            !      nbndval = nbnd_loc(iks)
+            !      npw = ngk(iks)
+            !      !$acc loop collapse(2)
+            !      DO lbnd = 1,nbndval
+            !         DO il3 = 1,npw
+            !            DO il1 = 1,l1_e
+            !               ig1 = nimage*(il1-1)+idx+1
+            !               hg(il3,lbnd,iks,il2) = vr_distr(ig1,il2)*ag(il3,lbnd,iks,il1)+hg(il3,lbnd,iks,il2)
+            !            ENDDO
+            !         ENDDO
+            !      ENDDO
+            !   ENDDO
+            !ENDDO
+            !!$acc end parallel
+            call nvtxEndRange
          ENDIF
          !
          ! Cycle ag
@@ -647,17 +600,17 @@ MODULE wbse_tools
       !
       IF(l2_e > 0) THEN
          !
+         call nvtxStartRange("OP4 SEQ")
+
          !$acc parallel vector_length(1024) present(nbnd_loc,ngk,ag,hg)
-         !$acc loop
+         !$acc loop collapse(2)
          DO il2 = l2_s,l2_e
-            !$acc loop seq
             DO iks = 1,kpt_pool_nloc
-               !
                nbndval = nbnd_loc(iks)
                npw = ngk(iks)
-               !
-               !$acc loop collapse(2)
+               !$acc loop 
                DO lbnd = 1,nbndval
+                  !$acc loop vector 
                   DO il3 = 1,npw
                      ag(il3,lbnd,iks,il2) = hg(il3,lbnd,iks,il2)
                   ENDDO
@@ -666,6 +619,7 @@ MODULE wbse_tools
             ENDDO
          ENDDO
          !$acc end parallel
+         call nvtxEndRange
          !
       ENDIF
       !
@@ -681,25 +635,24 @@ MODULE wbse_tools
       !
       IF(l2_s > 0) THEN
          !
+         call nvtxStartRange("OP5 SEQ")
          !$acc parallel vector_length(1024) present(nbnd_loc,ngk,ag,hg)
-         !$acc loop
+         !$acc loop  collapse(2)
          DO il2 = l2_s,l2_e
-            !$acc loop seq
             DO iks = 1,kpt_pool_nloc
-               !
                nbndval = nbnd_loc(iks)
                npw = ngk(iks)
-               !
-               !$acc loop collapse(2)
+               !$acc loop 
                DO lbnd = 1,nbndval
+                  !$acc loop vector
                   DO il3 = 1,npw
                      ag(il3,lbnd,iks,il2) = 0._DP
                   ENDDO
                ENDDO
-               !
             ENDDO
          ENDDO
          !$acc end parallel
+         call nvtxEndRange
          !
       ENDIF
       !
@@ -723,6 +676,7 @@ MODULE wbse_tools
       USE distribution_center,  ONLY : pert,kpt_pool,band_group
       USE pwcom,                ONLY : npwx
       USE westcom,              ONLY : nbnd_occ,n_trunc_bands
+      use nvtx
 #if defined(__CUDA)
       USE wvfct,                ONLY : g2kin
       USE wvfct_gpum,           ONLY : et=>et_d
@@ -809,43 +763,85 @@ MODULE wbse_tools
          !
          !$acc enter data copyin(nbnd_loc)
          !
-         !$acc parallel vector_length(1024) present(nbnd_loc,g2kin_save,ag)
-         !$acc loop
-         DO il1 = l1_s,l1_e
-            !$acc loop seq
-            DO iks = 1,kpt_pool_nloc
-               !
-               nbndval = nbnd_loc(iks)
-               !
-               !$acc loop collapse(2)
-               DO lbnd = 1,nbndval
-                  DO ig = 1,npwx
-                     !
-                     ! ibnd = band_group%l2g(lbnd)
-                     !
-                     ibnd = band_group_myoffset+lbnd
-                     !
-                     IF(turn_shift) THEN
-                        tmp = g2kin_save(ig,iks)-et(ibnd+n_trunc_bands,iks_do)
-                     ELSE
-                        tmp = g2kin_save(ig,iks)
-                     ENDIF
-                     !
-                     ! Same as the following line but without thread divergence
-                     ! IF(ABS(tmp) < minimum) tmp = SIGN(minimum,tmp)
-                     !
-                     tmp_abs = MAX(ABS(tmp),minimum)
-                     tmp_sgn = SIGN(1._DP,tmp)
-                     tmp = tmp_sgn*tmp_abs
-                     !
-                     ag(ig,lbnd,iks,il1) = ag(ig,lbnd,iks,il1)/tmp
-                     !
+         call nvtxStartRange("Potenital OP 3")
+         IF(turn_shift) THEN
+            !$acc parallel vector_length(1024) present(nbnd_loc,g2kin_save,ag)
+            !$acc loop collapse(2)
+            DO il1 = l1_s,l1_e
+               DO iks = 1,kpt_pool_nloc
+                  nbndval = nbnd_loc(iks)
+                  !$acc loop 
+                  DO lbnd = 1,nbndval
+                     !$acc loop vector
+                     DO ig = 1,npwx
+                        ibnd = band_group_myoffset+lbnd
+                        tmp = g2kin_save(ig,iks)- et(ibnd+n_trunc_bands,iks_do)
+                        ! Same as the following line but without thread divergence
+                        ! IF(ABS(tmp) < minimum) tmp = SIGN(minimum,tmp)
+                        tmp_abs = MAX(ABS(tmp),minimum)
+                        tmp_sgn = SIGN(1._DP,tmp)
+                        tmp = tmp_sgn*tmp_abs
+                        ag(ig,lbnd,iks,il1) = ag(ig,lbnd,iks,il1)/tmp
+                     ENDDO
                   ENDDO
                ENDDO
-               !
             ENDDO
-         ENDDO
-         !$acc end parallel
+            !$acc end parallel
+         ELSE
+            !$acc parallel vector_length(1024) present(nbnd_loc,g2kin_save,ag)
+            !$acc loop collapse(2)
+            DO il1 = l1_s,l1_e
+               DO iks = 1,kpt_pool_nloc
+                  nbndval = nbnd_loc(iks)
+                  !$acc loop
+                  DO lbnd = 1,nbndval
+                     !$acc loop vector
+                     DO ig = 1,npwx
+                        ibnd = band_group_myoffset+lbnd
+                        tmp = g2kin_save(ig,iks)
+                        ! Same as the following line but without thread divergence
+                        ! IF(ABS(tmp) < minimum) tmp = SIGN(minimum,tmp)
+                        tmp_abs = MAX(ABS(tmp),minimum)
+                        tmp_sgn = SIGN(1._DP,tmp)
+                        tmp = tmp_sgn*tmp_abs
+                        ag(ig,lbnd,iks,il1) = ag(ig,lbnd,iks,il1)/tmp
+                     ENDDO
+                  ENDDO
+               ENDDO
+            ENDDO
+            !$acc end parallel
+         ENDIF
+
+
+         !!$acc parallel vector_length(1024) present(nbnd_loc,g2kin_save,ag)
+         !!$acc loop
+         !DO il1 = l1_s,l1_e
+         !   !$acc loop seq
+         !   DO iks = 1,kpt_pool_nloc
+         !      nbndval = nbnd_loc(iks)
+         !      !$acc loop collapse(2)
+         !      DO lbnd = 1,nbndval
+         !         DO ig = 1,npwx
+         !            ibnd = band_group_myoffset+lbnd
+         !            IF(turn_shift) THEN
+         !               tmp = g2kin_save(ig,iks)- et(ibnd+n_trunc_bands,iks_do)
+         !            ELSE
+         !               tmp = g2kin_save(ig,iks)
+         !            ENDIF
+         !            ! Same as the following line but without thread divergence
+         !            ! IF(ABS(tmp) < minimum) tmp = SIGN(minimum,tmp)
+         !            tmp_abs = MAX(ABS(tmp),minimum)
+         !            tmp_sgn = SIGN(1._DP,tmp)
+         !            tmp = tmp_sgn*tmp_abs
+         !            ag(ig,lbnd,iks,il1) = ag(ig,lbnd,iks,il1)/tmp
+         !         ENDDO
+         !      ENDDO
+         !      !
+         !   ENDDO
+         !ENDDO
+         !!$acc end parallel
+
+         call nvtxEndRange
          !
          !$acc exit data delete(g2kin_save,nbnd_loc)
          DEALLOCATE(g2kin_save)
@@ -860,5 +856,98 @@ MODULE wbse_tools
 #endif
       !
     END SUBROUTINE
-    !
+    subroutine save_complex_array(filename_base, array)
+      IMPLICIT NONE
+      character(len=*), intent(in) :: filename_base
+      COMPLEX(8), INTENT(in) :: array(:,:,:,:)
+      integer :: unit
+      integer :: nx, ny, nz, nt
+      character(len=256) :: filename
+      integer :: i, j, k, l
+      real(8) :: real_part, imag_part
+  
+      nx = size(array, 1)
+      ny = size(array, 2)
+      nz = size(array, 3)
+      nt = size(array, 4)
+  
+      write(filename, '(A,A,I0,A,I0,A,I0,A,I0,A)') trim(filename_base), '_', nx, 'x', ny, 'x', nz, 'x', nt, '.bin'
+  
+      open(newunit=unit, file=filename, form='unformatted', access='stream', status='replace')
+      
+      do l = 1, nt
+          do k = 1, nz
+              do j = 1, ny
+                  do i = 1, nx
+                      real_part = real(array(i,j,k,l))
+                      imag_part = DIMAG(array(i,j,k,l))
+                      write(unit) real_part
+                      write(unit) imag_part
+                  end do
+              end do
+          end do
+      end do
+  
+      close(unit)
+  end subroutine save_complex_array
+
+  subroutine save_complex_array_2d(filename_base, array)
+   IMPLICIT NONE
+   character(len=*), intent(in) :: filename_base
+   COMPLEX(8), INTENT(in) :: array(:,:)
+   integer :: unit
+   integer :: nx, ny
+   character(len=256) :: filename
+   integer :: i, j
+   real(8) :: real_part, imag_part
+ 
+   nx = size(array, 1)
+   ny = size(array, 2)
+ 
+   write(filename, '(A,A,I0,A,I0,A)') trim(filename_base), '_', nx, 'x', ny, '.bin'
+ 
+   open(newunit=unit, file=filename, form='unformatted', access='stream', status='replace')
+ 
+   do j = 1, ny
+       do i = 1, nx
+           real_part = real(array(i,j))
+           imag_part = DIMAG(array(i,j))
+           write(unit) real_part
+           write(unit) imag_part
+       end do
+   end do
+ 
+   close(unit)
+ end subroutine save_complex_array_2d
+
+
+ subroutine save_real_array_2d(filename_base, array)
+   IMPLICIT NONE
+   character(len=*), intent(in) :: filename_base
+   REAL(8), INTENT(in) :: array(:,:)
+   integer :: unit
+   integer :: nx, ny
+   character(len=256) :: filename
+   integer :: i, j
+   real(8) :: value
+ 
+   nx = size(array, 1)
+   ny = size(array, 2)
+ 
+   write(filename, '(A,A,I0,A,I0,A)') trim(filename_base), '_', nx, 'x', ny, '.bin'
+ 
+   open(newunit=unit, file=filename, form='unformatted', access='stream', status='replace')
+ 
+   do j = 1, ny
+       do i = 1, nx
+           value = array(i,j)
+           write(unit) value
+       end do
+   end do
+ 
+   close(unit)
+ end subroutine save_real_array_2d
+ 
+ 
+  !
 END MODULE

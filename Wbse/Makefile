@@ -49,6 +49,7 @@ PWOBJS = ../../PW/src/libpw.a
 QEMODS = ../../LR_Modules/liblrmod.a ../../KS_Solvers/libks_solvers.a ../../dft-d3/libdftd3qe.a $(BASEMODS)
 
 WESTLIBS = \
+./Thrust_Kernels/lib_thrust_kernels.a \
 ../Wstat/libwstat.a \
 ../IO_kernel/lib_io_kernel.a \
 ../DFPT_kernel/lib_dfpt_kernel.a \
@@ -60,7 +61,6 @@ WESTLIBS = \
 ../Modules/libmodules.a \
 ../Libraries/Forpy/libforpy.a \
 ../Libraries/Json/libjson.a \
-./Thrust_Kernels/lib_thrust_kernels.a \
 ../Libraries/Base64/libbase64.a
 
 TLDEPS = bindir mods pwlibs pw
@@ -94,3 +94,4 @@ title :
 	@echo
 
 include make.depend
+

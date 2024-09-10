@@ -23,9 +23,7 @@
 //!$acc end parallel
 
 struct compute_sums {
-    //#if defined(__CUDA)
     __host__ __device__
-    //#endif
     thrust::tuple<double, double, double> operator()(const thrust::tuple<double, double>& t) const {
         double orb_i = thrust::get<0>(t);
         double orb_j = thrust::get<1>(t);

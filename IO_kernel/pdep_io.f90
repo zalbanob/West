@@ -158,6 +158,7 @@ MODULE pdep_io
     SUBROUTINE pdep_read_G_and_distribute(fname,pdepg,iq)
       !
       USE mp_wave,      ONLY : splitwf
+      use OMP_LIB
       !
       IMPLICIT NONE
       !
@@ -181,9 +182,18 @@ MODULE pdep_io
       INTEGER :: ierr
       INTEGER :: header(HD_LENGTH)
       INTEGER(i8b) :: offset
+      INTEGER :: THREAD_NUM
+      INTEGER :: retry_count
+      LOGICAL :: file_opened
+
+
+      retry_count = 0
+      file_opened = .FALSE.
+
       !
-      CALL start_clock('pdep_read')
+      !CALL start_clock('pdep_read')
       !
+      THREAD_NUM =  omp_get_thread_num()
       IF(PRESENT(iq)) THEN
          iq_ = iq
       ELSE
@@ -203,11 +213,30 @@ MODULE pdep_io
          ! ONLY ROOT W/IN BGRP READS
          !
          IF(me_bgrp == root_bgrp) THEN
+            !write(*, '(A,I0,A,A)') 'Thread [', THREAD_NUM, '] reading ', TRIM(fname)
             !
             OPEN(NEWUNIT=iun,FILE=TRIM(fname),ACCESS='STREAM',FORM='UNFORMATTED',STATUS='OLD',IOSTAT=ierr)
             IF(ierr /= 0) THEN
                CALL errore('pdep_read','Cannot read file: '//TRIM(fname),1)
             ENDIF
+
+            !DO WHILE (.NOT. file_opened .AND. retry_count < 20)
+            !  OPEN(NEWUNIT=iun, FILE=TRIM(fname), ACCESS='STREAM', FORM='UNFORMATTED', STATUS='OLD', IOSTAT=ierr)
+            !  
+            !  IF (ierr == 0) THEN
+            !    file_opened = .TRUE.
+            !  ELSE
+            !    !retry_count = retry_count + 1
+            !    IF (retry_count < 20) THEN
+            !      CALL SLEEP(3)  ! Sleep for 1 second before retrying
+            !    END IF
+            !  END IF
+            !END DO
+            ! 
+            !IF (.NOT. file_opened) THEN
+            !  CALL errore('pdep_read', 'Cannot read file: '//TRIM(fname)//' after 20 attempts', 1)
+            !END IF
+
             !
             offset = 1
             READ(iun,POS=offset) header
@@ -238,7 +267,7 @@ MODULE pdep_io
          ENDDO
          CALL gq_l2gmap_kdip(npwq_g,ngq_g(iq_),ngq(iq_),igq_l2g,igq_l2g_kdip)
          DEALLOCATE(igq_l2g)
-         !
+         !                                             mpime, nproc,      root,     comm
          CALL splitwf(pdepg,tmp_vec,npwq,igq_l2g_kdip,me_bgrp,nproc_bgrp,root_bgrp,intra_bgrp_comm)
          DEALLOCATE(igq_l2g_kdip)
          !
@@ -258,10 +287,28 @@ MODULE pdep_io
          !
          IF(me_bgrp == root_bgrp) THEN
             !
+            !write(*, '(A,I0,A,A)') 'Thread [', THREAD_NUM, '] reading ', TRIM(fname)
             OPEN(NEWUNIT=iun,FILE=TRIM(fname),ACCESS='STREAM',FORM='UNFORMATTED',STATUS='OLD',IOSTAT=ierr)
             IF(ierr /= 0) THEN
                CALL errore('pdep_read','Cannot read file: '//TRIM(fname),1)
             ENDIF
+            !DO WHILE (.NOT. file_opened .AND. retry_count < 20)
+            !  OPEN(NEWUNIT=iun, FILE=TRIM(fname), ACCESS='STREAM', FORM='UNFORMATTED', STATUS='OLD', IOSTAT=ierr)
+            !  
+            !  IF (ierr == 0) THEN
+            !    file_opened = .TRUE.
+            !  ELSE
+            !    !retry_count = retry_count + 1
+            !    IF (retry_count < 20) THEN
+            !      CALL SLEEP(3)  ! Sleep for 1 second before retrying
+            !    END IF
+            !  END IF
+            !END DO
+            !
+            !IF (.NOT. file_opened) THEN
+            !  CALL errore('pdep_read', 'Cannot read file: '//TRIM(fname)//' after 20 attempts', 1)
+            !END IF
+
             !
             offset = 1
             READ(iun,POS=offset) header
@@ -288,7 +335,7 @@ MODULE pdep_io
          !
       ENDIF
       !
-      CALL stop_clock('pdep_read')
+      !CALL stop_clock('pdep_read')
       !
     END SUBROUTINE
     !

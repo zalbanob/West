@@ -291,6 +291,7 @@ SUBROUTINE bse_start()
         !
      ENDDO
      !
+     print *, "ON SETUP TAU:(", npwx,",", n_tau, ")"
      ALLOCATE(tau_all(npwx,n_tau))
      !
      ! reset counter for actual reading in wbse_io

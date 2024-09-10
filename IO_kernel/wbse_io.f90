@@ -17,6 +17,114 @@ MODULE wbse_io
   IMPLICIT NONE
   !
   CONTAINS
+  real function log2(x)
+      implicit none
+      real, intent(in) :: x
+      log2 = log(x) / log(2.)
+  end function
+
+  SUBROUTINE read_bse_pots_g_w_cache(rhog,fixed_band_i,fixed_band_j,ispin, scan_array)
+   !
+   USE kinds,          ONLY : DP
+   USE pwcom,          ONLY : npwx
+   USE mp_global,      ONLY : npool
+   USE pdep_io,        ONLY : pdep_read_G_and_distribute
+   USE westcom,        ONLY : wbse_init_save_dir,l_bse,l_reduce_io,tau_is_read,tau_all,n_tau,&
+                            & n_trunc_bands
+   !
+   USE OMP_LIB
+   !
+   IMPLICIT NONE
+   !
+   ! I/O
+   !
+   COMPLEX(DP), INTENT(OUT) :: rhog(npwx)
+   INTEGER, INTENT(IN) :: fixed_band_i,fixed_band_j,ispin
+   !
+   ! Workspace
+   !
+   INTEGER :: lspin,band_i,band_j,iread
+   CHARACTER :: my_spin
+   CHARACTER(LEN=6) :: my_labeli,my_labelj
+   CHARACTER(LEN=256) :: fname
+
+   INTEGER, INTENT(INOUT) :: scan_array(:) 
+   INTEGER :: tid, LOCAL_TAU, i, temp, updated
+  ! print *, "n_tau", n_tau, " SHAPE(tau_all) ", shape(tau_all), " shape(tau_is_read) ", shape(tau_is_read)
+
+
+   !
+   ! Local spin index when using spin parallelization
+   !
+   lspin = ispin
+   IF(npool == 2) lspin = 1
+   !
+   band_i = MIN(fixed_band_i,fixed_band_j)
+   band_j = MAX(fixed_band_i,fixed_band_j)
+
+   IF(l_reduce_io) THEN
+      !
+      iread = tau_is_read(band_i,band_j,lspin)
+      IF(iread > 0) THEN
+         rhog(:) = tau_all(:,iread)
+         RETURN
+      ENDIF
+      !
+   ENDIF
+
+   WRITE(my_labeli,'(i6.6)') band_i+n_trunc_bands
+   WRITE(my_labelj,'(i6.6)') band_j+n_trunc_bands
+   WRITE(my_spin,'(i1)') ispin
+   
+   IF(l_bse) THEN
+      fname = TRIM(wbse_init_save_dir)//'/int_W'//my_labeli//'_'//my_labelj//'_'//my_spin//'.dat'
+   ELSE
+      fname = TRIM(wbse_init_save_dir)//'/int_v'//my_labeli//'_'//my_labelj//'_'//my_spin//'.dat'
+   ENDIF
+   CALL pdep_read_G_and_distribute(fname,rhog)
+   !!$OMP single
+   !print *, "before scan_array: ", scan_array
+   !!$OMP end single
+   temp = 0 
+   updated = 0
+   tid = omp_get_thread_num() + 1
+   scan_array(tid) = 0
+   IF(l_reduce_io) THEN 
+     scan_array(tid) = 1
+     updated = 1
+   ENDIF 
+   !$OMP BARRIER
+
+   do i = 1, INT(LOG2(REAL(size(scan_array))))
+      if (tid > 2**(i-1)) then
+          temp = scan_array(tid - 2**(i-1))
+      else
+         temp = 0
+      end if
+      !$OMP BARRIER
+      if (tid > 2**(i-1)) then
+          scan_array(tid) = scan_array(tid) + temp
+      end if
+      !$OMP BARRIER
+  end do
+
+  !!$OMP single
+  !print *, "after scan_array: ", scan_array
+  !!$OMP end single
+
+  if  (updated .ne. 0) then
+      LOCAL_TAU = scan_array(tid)
+      !print *, omp_get_thread_num() + 1, LOCAL_TAU
+      tau_is_read(band_i,band_j,lspin) = LOCAL_TAU
+      tau_all(:,LOCAL_TAU) = rhog
+  end if 
+
+  !$OMP single
+  n_tau =  n_tau + scan_array(size(scan_array))
+  !$OMP end single
+
+ END SUBROUTINE
+
   !
   SUBROUTINE read_bse_pots_g(rhog,fixed_band_i,fixed_band_j,ispin)
     !
@@ -59,8 +167,8 @@ MODULE wbse_io
        !
     ENDIF
     !
-    WRITE(my_labeli,'(i6.6)') band_i+n_trunc_bands
-    WRITE(my_labelj,'(i6.6)') band_j+n_trunc_bands
+    WRITE(my_labeli,'(i6.6)') band_i + n_trunc_bands
+    WRITE(my_labelj,'(i6.6)') band_j + n_trunc_bands
     WRITE(my_spin,'(i1)') ispin
     !
     IF(l_bse) THEN
@@ -72,9 +180,11 @@ MODULE wbse_io
     !
     IF(l_reduce_io) THEN
        !
-       n_tau = n_tau+1
-       tau_is_read(band_i,band_j,lspin) = n_tau
-       tau_all(:,n_tau) = rhog
+      !!$omp critical
+      n_tau = n_tau+1
+      tau_is_read(band_i,band_j,lspin) = n_tau
+      tau_all(:,n_tau) = rhog
+       !!$omp end critical
        !
     ENDIF
     !
